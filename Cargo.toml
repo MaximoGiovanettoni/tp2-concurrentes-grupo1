@@ -1,0 +1,8 @@
+[package]
+name = "tp2_reservas"
+version = "0.1.0"
+edition = "2021"
+description = "TP2 Programación Concurrente (FIUBA): Motor Distribuido de Reservas y Pagos"
+
+# Sin dependencias externas: compila de forma aislada con la librería estándar.
+[dependencies]

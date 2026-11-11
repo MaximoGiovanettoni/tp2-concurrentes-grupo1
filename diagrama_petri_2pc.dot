@@ -1,0 +1,37 @@
+digraph G {
+  rankdir=LR; nodesep=0.35; ranksep=0.6; fontname="Helvetica";
+  node [fontname="Helvetica", fontsize=10];
+  edge [fontsize=9];
+  // Lugares
+  node [shape=circle, style=filled, fillcolor="#FFFFFF", width=0.5, fixedsize=false];
+  CI [label="Coordinador_\nInicio\n●", fillcolor="#DDEBF7"];
+  CE [label="Coordinador_\nEsperando_Votos", fillcolor="#DDEBF7"];
+  CC [label="Coordinador_\nCommit", fillcolor="#DDEBF7"];
+  CR [label="Coordinador_\nRollback", fillcolor="#DDEBF7"];
+  CX [label="Coordinador_\nCaido", fillcolor="#F8CBAD"];
+  PI [label="Participante_\nInit\n●", fillcolor="#E2EFDA"];
+  PP [label="Participante_\nPrepared", fillcolor="#E2EFDA"];
+  EC [label="Estado_\nCommit", fillcolor="#E2EFDA"];
+  ER [label="Estado_\nRollback", fillcolor="#E2EFDA"];
+  node [fillcolor="#FFF2CC", width=0.3];
+  MP [label="Msg_\nPrepare"]; MY [label="Msg_\nVoteYes"]; MN [label="Msg_\nVoteNo"]; MC [label="Msg_\nCommit"]; MR [label="Msg_\nRollback"];
+  // Transiciones
+  node [shape=box, style=filled, fillcolor="#404040", fontcolor="white", height=0.3];
+  t1 [label="t1 EnviarPrepare"]; t2 [label="t2 VotaYes"]; t3 [label="t3 VotaNo"];
+  t4 [label="t4 DecideCommit"]; t5 [label="t5 DecideRollback"];
+  t6 [label="t6 AplicaCommit"]; t7 [label="t7 AplicaRollback"];
+  node [fillcolor="#C00000"];
+  t8 [label="t8 TimeoutVotos"]; t9 [label="t9 RollbackSinVotar"]; t10 [label="t10 CaeCoordinador"];
+  // Arcos
+  CI->t1; t1->CE; t1->MP;
+  PI->t2; MP->t2; t2->PP; t2->MY;
+  PI->t3; MP->t3; t3->ER; t3->MN;
+  CE->t4; MY->t4; t4->CC; t4->MC;
+  CE->t5; MN->t5; t5->CR; t5->MR;
+  PP->t6; MC->t6; t6->EC;
+  PP->t7; MR->t7; t7->ER;
+  edge [color="#C00000"];
+  CE->t8; t8->CR; t8->MR;
+  PI->t9; MR->t9; t9->ER;
+  CE->t10; t10->CX;
+}

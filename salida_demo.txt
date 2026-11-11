@@ -1,0 +1,115 @@
+=== PARTE 1: Actores CuentaUsuario e InventarioEntradas ===
+Cuenta única, 50 hilos debitan $30 con saldo $1000 -> débitos OK: 33 (esperado 33), saldo final: $10 (esperado $10)
+100 compradores compiten por 20 asientos (precio $50, 1 de cada 3 sin saldo suficiente):
+  vendidos=20 cobrado=$1000 (= vendidos*50 -> 1000)
+  compras OK=20 sin asiento=73 sin saldo=7 reservas colgadas=0
+  CONSISTENTE (nada vendido 2 veces, cobros exactos): true
+
+=== PARTE 2: Heartbeats + Monitor (+ Bully si cae el líder) ===
+Nodos 0..2 | líder actual: nodo 2 | nodo que se va a caer: 2
+[ 3005 ms] *** SE CAE el nodo 2 (deja de enviar heartbeats) ***
+[ 4001 ms] Monitor: Sospechoso(2)
+[ 5001 ms] Monitor: Caido(2)
+
+El Monitor declaró CAIDO al líder -> los nodos restantes eligen líder (Bully):
+  Nodo 0: inicio elección -> mando ELECCION a los nodos con id mayor
+  Nodo 1: recibí ELECCION de 0 -> respondo y arranco mi propia elección
+  Nodo 1: inicio elección -> mando ELECCION a los nodos con id mayor
+  Nodo 1: nadie con id mayor respondió -> SOY EL NUEVO LÍDER
+  Nodo 0: acepto como líder al nodo 1
+Líder según cada nodo: [Some(1), Some(1), None] | mensajes intercambiados: 6
+
+=== PARTE 3: Two-Phase Commit ===
+
+--- A) Todo OK ---
+[FASE 1 - PREPARE] tx 1: envío PREPARE a 2 participantes
+  voto de ServicioPagos: Yes
+  voto de ServicioInventario: Yes
+[FASE 2 - COMMIT] decisión registrada en log durable ANTES de enviarla
+  envío Commit a ServicioPagos
+  envío Commit a ServicioInventario
+  DECISIÓN FINAL: Some(Commit)
+  ServicioPagos -> Confirmado | bloqueado=false | saldo=950 fondos_retenidos=false
+      WAL: tx 1: PREPARED (recurso reservado) -> voto YES
+      WAL: tx 1: COMMIT aplicado
+  ServicioInventario -> Confirmado | bloqueado=false | asiento_libre=false asiento_retenido=false vendido=true
+      WAL: tx 1: PREPARED (recurso reservado) -> voto YES
+      WAL: tx 1: COMMIT aplicado
+
+--- B) Asiento ya vendido (Inventario vota NO) ---
+[FASE 1 - PREPARE] tx 1: envío PREPARE a 2 participantes
+  voto de ServicioPagos: Yes
+  voto de ServicioInventario: No
+[FASE 2 - ROLLBACK] decisión registrada en log durable ANTES de enviarla
+  envío Rollback a ServicioPagos
+  envío Rollback a ServicioInventario
+  DECISIÓN FINAL: Some(Rollback)
+  ServicioPagos -> Abortado | bloqueado=false | saldo=1000 fondos_retenidos=false
+      WAL: tx 1: PREPARED (recurso reservado) -> voto YES
+      WAL: tx 1: ROLLBACK aplicado (recurso liberado)
+  ServicioInventario -> Abortado | bloqueado=false | asiento_libre=false asiento_retenido=false vendido=false
+      WAL: tx 1: no puedo reservar -> ABORT local, voto NO
+      WAL: tx 1: ROLLBACK aplicado (recurso liberado)
+
+--- C) Saldo insuficiente (Pagos vota NO) ---
+[FASE 1 - PREPARE] tx 1: envío PREPARE a 2 participantes
+  voto de ServicioPagos: No
+  voto de ServicioInventario: Yes
+[FASE 2 - ROLLBACK] decisión registrada en log durable ANTES de enviarla
+  envío Rollback a ServicioPagos
+  envío Rollback a ServicioInventario
+  DECISIÓN FINAL: Some(Rollback)
+  ServicioPagos -> Abortado | bloqueado=false | saldo=10 fondos_retenidos=false
+      WAL: tx 1: no puedo reservar -> ABORT local, voto NO
+      WAL: tx 1: ROLLBACK aplicado (recurso liberado)
+  ServicioInventario -> Abortado | bloqueado=false | asiento_libre=true asiento_retenido=false vendido=false
+      WAL: tx 1: PREPARED (recurso reservado) -> voto YES
+      WAL: tx 1: ROLLBACK aplicado (recurso liberado)
+
+--- D) ServicioPagos no responde (timeout) ---
+[FASE 1 - PREPARE] tx 1: envío PREPARE a 2 participantes
+  voto de ServicioInventario: Yes
+  TIMEOUT esperando votos: los que faltan se cuentan como NO
+[FASE 2 - ROLLBACK] decisión registrada en log durable ANTES de enviarla
+  envío Rollback a ServicioPagos
+  envío Rollback a ServicioInventario
+  DECISIÓN FINAL: Some(Rollback)
+  ServicioPagos -> Inicial | bloqueado=false | saldo=1000 fondos_retenidos=false
+      WAL: (caído) mensaje ignorado
+      WAL: (caído) mensaje ignorado
+  ServicioInventario -> Abortado | bloqueado=true | asiento_libre=true asiento_retenido=false vendido=false
+      WAL: tx 1: PREPARED (recurso reservado) -> voto YES
+      WAL: TIMEOUT esperando decisión: estoy PREPARADO, no puedo hacer commit ni abort por mi cuenta -> BLOQUEADO
+      WAL: tx 1: ROLLBACK aplicado (recurso liberado)
+
+--- E) El coordinador cae tras el Prepare ---
+[FASE 1 - PREPARE] tx 1: envío PREPARE a 2 participantes
+  voto de ServicioPagos: Yes
+  voto de ServicioInventario: Yes
+  *** EL COORDINADOR SE CAE antes de decidir: nadie envía COMMIT ni ROLLBACK ***
+  DECISIÓN FINAL: None
+  ServicioPagos -> Preparado | bloqueado=true | saldo=950 fondos_retenidos=true
+      WAL: tx 1: PREPARED (recurso reservado) -> voto YES
+      WAL: TIMEOUT esperando decisión: estoy PREPARADO, no puedo hacer commit ni abort por mi cuenta -> BLOQUEADO
+  ServicioInventario -> Preparado | bloqueado=true | asiento_libre=false asiento_retenido=true vendido=false
+      WAL: tx 1: PREPARED (recurso reservado) -> voto YES
+      WAL: TIMEOUT esperando decisión: estoy PREPARADO, no puedo hacer commit ni abort por mi cuenta -> BLOQUEADO
+
+=== PARTE 4: Red de Petri del 2PC (1 coordinador + 1 participante) ===
+
+--- Modelo básico (sin fallas) ---
+Lugares: 14 | Transiciones: 7 | Marcados alcanzables: 7
+Máximo de tokens por lugar: 1 -> 1-ACOTADA (Safe)
+Invariante participante  (Init+Prepared+Commit+Rollback = 1): true
+Invariante coordinador   (Inicio+Esperando+Commit+Rollback+Caido = 1): true
+Marcados con Commit y Rollback simultáneos en el participante: 0
+Marcados muertos: 2 | de ellos BLOQUEADOS (participante sin decidir): 0
+
+--- Modelo con fallas (timeout + caída del coordinador) ---
+Lugares: 14 | Transiciones: 10 | Marcados alcanzables: 15
+Máximo de tokens por lugar: 1 -> 1-ACOTADA (Safe)
+Invariante participante  (Init+Prepared+Commit+Rollback = 1): true
+Invariante coordinador   (Inicio+Esperando+Commit+Rollback+Caido = 1): true
+Marcados con Commit y Rollback simultáneos en el participante: 0
+Marcados muertos: 7 | de ellos BLOQUEADOS (participante sin decidir): 1
+   BLOQUEO -> {Coordinador_Caido, Participante_Prepared, Msg_VoteYes}
