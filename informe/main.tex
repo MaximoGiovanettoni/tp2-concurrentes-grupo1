@@ -1,0 +1,78 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish,provide=*]{babel}
+\usepackage[margin=2.5cm, top=2.4cm, bottom=2.6cm]{geometry}
+\usepackage{graphicx}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{tikz}
+\usepackage[font=small, labelfont=bf, skip=6pt]{caption}
+
+\graphicspath{{includes/}}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    tabsize=4,
+    aboveskip=8pt,
+    belowskip=8pt
+}
+
+\tikzset{
+    caja/.style={draw, align=center, inner sep=7pt, font=\small},
+    flecha/.style={->, thick}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\setlength{\headheight}{14pt}
+\rhead{\small Programación Concurrente: TP2}
+\rfoot{\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\setlist[enumerate]{itemsep=0.45em, topsep=0.5em, leftmargin=1.4em}
+\setlist[itemize]{itemsep=0.25em, topsep=0.4em}
+
+\begin{document}
+
+\begin{titlepage}
+\thispagestyle{empty}
+\centering
+\vspace*{1.6cm}
+\includegraphics[width=2.8cm]{fiuba}
+
+\vspace{0.9cm}
+{\small\scshape Universidad de Buenos Aires}\\[0.2em]
+{\small\scshape Facultad de Ingeniería}
+
+\vspace{2.1cm}
+{\large Programación Concurrente}\\[0.25em]
+{\small Curso Musso, 2\textsuperscript{do} cuatrimestre 2026}
+
+\vspace{1.15cm}
+{\LARGE Motor Distribuido de Reservas y Pagos}\\[0.45em]
+{\large Trabajo Práctico Nº 2}
+
+\vspace{1.5cm}
+\begin{tabular}{@{}p{7.2cm} r@{}}
+Basile, Joaquín Ezequiel & 111687 \\[0.35em]
+Binker, Alejandro & 107056 \\[0.35em]
+Giovanettoni, Máximo & 110303 \\[0.35em]
+Verne, Bruno & 112176 \\
+\end{tabular}
+
+\vfill
+\end{titlepage}
+
+El trabajo es el núcleo de una venta de entradas. La cuenta de cada usuario y los asientos viven en actores distintos: el estado queda en el hilo de cada uno, y una compra se resuelve mandando mensajes.
+
+\input{tex/actores}
+
+\end{document}
