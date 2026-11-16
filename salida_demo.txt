@@ -1,9 +1,6 @@
 === PARTE 1: Actores CuentaUsuario e InventarioEntradas ===
-Cuenta única, 50 hilos debitan $30 con saldo $1000 -> débitos OK: 33 (esperado 33), saldo final: $10 (esperado $10)
-100 compradores compiten por 20 asientos (precio $50, 1 de cada 3 sin saldo suficiente):
-  vendidos=20 cobrado=$1000 (= vendidos*50 -> 1000)
-  compras OK=20 sin asiento=73 sin saldo=7 reservas colgadas=0
-  CONSISTENTE (nada vendido 2 veces, cobros exactos): true
+50 hilos debitan 30 sobre un saldo de 1000 -> ok: 33, saldo: 10
+20 hilos piden la única entrada -> ok: 1, libres: 0
 
 === PARTE 2: Heartbeats + Monitor (+ Bully si cae el líder) ===
 Nodos 0..2 | líder actual: nodo 2 | nodo que se va a caer: 2

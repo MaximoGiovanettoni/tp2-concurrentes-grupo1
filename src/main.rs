@@ -11,14 +11,10 @@ use tp2_reservas::petri;
 
 fn parte1() {
     println!("=== PARTE 1: Actores CuentaUsuario e InventarioEntradas ===");
-    let (ok, saldo) = actores::simular_debitos_concurrentes(1000, 30, 50);
-    println!("Cuenta única, 50 hilos debitan $30 con saldo $1000 -> débitos OK: {} (esperado 33), saldo final: ${} (esperado $10)", ok, saldo);
-
-    let r = actores::simular_ventas(20, 100, 100, 50);
-    println!("100 compradores compiten por 20 asientos (precio $50, 1 de cada 3 sin saldo suficiente):");
-    println!("  vendidos={} cobrado=${} (= vendidos*50 -> {})", r.vendidos, r.cobrado, r.vendidos as u64 * 50);
-    println!("  compras OK={} sin asiento={} sin saldo={} reservas colgadas={}", r.exitos, r.sin_asiento, r.sin_saldo, r.reservas_colgadas);
-    println!("  CONSISTENTE (nada vendido 2 veces, cobros exactos): {}", r.consistente);
+    let (ok, saldo) = actores::simular_debitos(1000, 30, 50);
+    println!("50 hilos debitan 30 sobre un saldo de 1000 -> ok: {ok}, saldo: {saldo}");
+    let (ok, libres) = actores::simular_reservas(1, 20);
+    println!("20 hilos piden la única entrada -> ok: {ok}, libres: {libres}");
 }
 
 fn parte2(forzar_lider: bool) {
