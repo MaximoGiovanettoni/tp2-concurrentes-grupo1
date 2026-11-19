@@ -1,0 +1,143 @@
+\section{Elección de líder: Algoritmo de Bully}
+
+Cuando el monitor declara caído al líder, los nodos restantes tienen que
+elegir uno nuevo. El código está en el módulo \texttt{bully} del crate
+\texttt{tp2\_reservas}. Esta parte se corre con
+\texttt{cargo run -- parte2-lider}; la elección se dispara solo si el nodo
+que cayó era el líder, porque si cae un seguidor el liderazgo no cambia.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=3.2cm,y=0.8cm]
+  % Nodos
+  \node[caja] (n0) at (0,0) {Nodo 0};
+  \node[caja] (n1) at (1,0) {Nodo 1};
+  \node[caja] (n2) at (2,0) {Nodo 2 (caído)};
+
+  % Líneas de vida (empiezan un poco más abajo de las cajas)
+  \foreach \x in {0,1,2} \draw[dashed] (\x,-0.4) -- (\x,-6.5);
+  
+  % Flecha 1: Eleccion{0}
+  \draw[flecha] (0,-1.2) -- node[above,font=\scriptsize]{\texttt{Eleccion\{0\}}} (1,-1.2);
+  
+  % Flecha 2: Respuesta{1}
+  \draw[flecha] (1,-2.0) -- node[above,font=\scriptsize]{\texttt{Respuesta\{1\}}} (0,-2.0);
+  
+  % Flecha 3: Eleccion{1} (hacia el caído)
+  \draw[flecha] (1,-2.8) -- node[above,font=\scriptsize]{\texttt{Eleccion\{1\}}} (2,-2.8);
+  \node[font=\scriptsize,anchor=west] at (2.2,-2.8) {sin respuesta};
+  
+  % Flecha 4: Timeout (en el nodo 1)
+  \draw[flecha,dashed] (1,-3.6) -- node[above,font=\scriptsize]{timeout} (1.8,-3.6);
+  
+  % Flecha 5 y 6: Coordinador{1}
+  \draw[flecha] (1,-4.4) -- node[above,font=\scriptsize]{\texttt{Coordinador\{1\}}} (0,-4.4);
+  \draw[flecha] (1,-5.2) -- node[above,font=\scriptsize]{\texttt{Coordinador\{1\}}} (2,-5.2);
+  \node[font=\scriptsize,anchor=west] at (2.2,-5.2) {(descartado)};
+\end{tikzpicture}
+\caption{Secuencia del Bully cuando cae el líder (nodo 2) y queda el nodo 1
+como el vivo de mayor ID.}
+\label{fig:bully-secuencia}
+\end{figure}
+
+\subsection{Supuestos}
+
+Los nodos tienen IDs únicos y ordenados. Se comunican por canales con
+timeout: el mismo \texttt{recv\_timeout} del monitor sirve para no esperar
+para siempre una respuesta. Los fallos son de tipo \emph{crash-stop}: un
+nodo o está vivo o no contesta, no hay respuestas corruptas ni
+bizantinas. Estas tres hipótesis son las del paper original de
+García-Molina (1982) y son las que el simulador respeta: los nodos caídos
+simplemente no reciben ni contestan mensajes.
+
+\subsection{Los tres mensajes}
+
+El algoritmo usa tres tipos de mensaje, definidos en el enum
+\texttt{MsgBully}:
+
+\begin{itemize}
+    \item \texttt{Eleccion\{de\}}: ``quiero ser líder, ¿hay alguien con ID
+    mayor que yo vivo?''. Se manda a todos los nodos con ID mayor.
+    \item \texttt{Respuesta\{de\}}: ``yo (ID mayor) estoy vivo, retirate''.
+    Es el OK del paper.
+    \item \texttt{Coordinador\{lider\}}: ``soy el nuevo líder, aceptame''.
+    Lo manda el ganador a todos los demás.
+\end{itemize}
+
+Un nodo caído no recibe nada y no contesta nada. Para los demás es
+silencio, igual que en el monitor: no hay un mensaje de error, hay
+ausencia de mensaje.
+
+\subsection{El escenario del trabajo}
+
+Nodos 0, 1 y 2. El líder es el 2, que es el de mayor ID. El monitor
+detecta que el 2 cayó y avisa al nodo 0. La secuencia es la de la
+Figura~\ref{fig:bully-secuencia}:
+
+\begin{enumerate}
+    \item El 0 inicia la elección: manda \texttt{Eleccion\{0\}} a los
+    nodos con ID mayor. Solo al 1, porque el 2 está caído.
+    \item El 1 recibe \texttt{Eleccion\{0\}}, contesta
+    \texttt{Respuesta\{1\}} al 0 y arranca su propia elección: manda
+    \texttt{Eleccion\{1\}} a los mayores que él. Solo al 2, que no
+    contesta.
+    \item El 0 recibe \texttt{Respuesta\{1\}} y se retira. Hay alguien
+    mayor vivo. Pasa a esperar el anuncio del 1.
+    \item El 1 hace timeout sin respuestas (el 2 no contesta) y se
+    declara líder. Manda \texttt{Coordinador\{1\}} a todos.
+    \item El 0 recibe \texttt{Coordinador\{1\}} y lo acepta. El 2 sigue
+    caído y no participa.
+\end{enumerate}
+
+El resultado es el nodo 1, que es el vivo con mayor ID. Los mensajes
+intercambiados son pocos: dos de elección, una respuesta y un anuncio. Si
+el 1 también estuviera caído, el 0 haría timeout sin respuestas y se
+declararía líder directamente.
+
+\subsection{Complejidad y garantía}
+
+En el peor caso, todos los nodos inician elección a la vez y cada uno
+manda \texttt{Eleccion} a todos los mayores: son $O(n^2)$ mensajes. En el
+mejor caso, el nodo que detecta la falla es el de mayor ID vivo y se
+declara líder con $O(n)$ mensajes. La garantía es que gana el nodo vivo
+con mayor ID, siempre que los timeouts sean mayores que la latencia de la
+red. Si no lo son, un nodo puede declararse líder antes de que llegue la
+respuesta del mayor, y el algoritmo converge igual pero con más
+elecciones espurias.
+
+\subsection{Limitaciones}
+
+Bully no resuelve el \emph{split-brain}. Si el monitor declara caído al
+líder por una falsa alarma y el líder sigue vivo pero lento, pueden
+coexistir dos líderes temporales: el viejo, que cree que sigue siéndolo, y
+el nuevo, elegido por los demás. El paper original asume que el monitor no
+se equivoca; en la práctica se resuelve con quórum (el líder necesita
+mayoría para decidir), leases (el liderazgo vence solo) o fencing tokens
+(cada líder tiene un número de generación y los recursos rechazan
+operaciones de generaciones viejas). Bully no usa ninguna de las tres: es
+un algoritmo didáctico, no uno de producción. Raft y Paxos existen
+justamente porque Bully no alcanza para sistemas reales.
+
+La segunda limitación es que Bully depende de que los IDs sean conocidos y
+estables. En un sistema con nodos que se unen y se van dinámicamente, el
+ID deja de ser un buen criterio de liderazgo: el nodo con mayor ID puede
+ser el más nuevo y el menos cargado, y elegirlo líder no es
+necesariamente lo que conviene.
+
+\subsection{Pruebas}
+
+\texttt{cae\_el\_lider\_y\_gana\_el\_mayor\_vivo} corre la elección con
+tres nodos, tira abajo al 2 y verifica que el líder que ven los vivos es
+el 1.
+
+\texttt{cinco\_nodos\_caen\_los\_dos\_mayores} extiende el escenario a
+cinco nodos, tira abajo al 3 y al 4, y verifica que gana el 2.
+
+\texttt{si\_el\_mayor\_esta\_vivo\_gana\_aunque\_inicie\_otro} corre con
+los tres nodos vivos e inicia la elección desde el 0. El 2 responde y
+gana: el algoritmo no depende de quién inicia, depende de quién tiene el
+ID más alto.
+
+Los tres tests verifican la misma propiedad desde ángulos distintos: gana
+el vivo con mayor ID, sin importar quién disparó la elección ni cuántos
+nodos cayeron.
