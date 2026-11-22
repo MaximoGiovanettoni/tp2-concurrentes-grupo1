@@ -1,0 +1,243 @@
+\section{Transacciones Distribuidas}
+
+Una compra toca dos microservicios: \texttt{ServicioPagos} debita la plata y
+\texttt{ServicioInventario} asigna el asiento. Son procesos distintos y cada
+uno tiene su base. No hay una transacción local que abarque a los dos, así
+que la atomicidad hay que armarla con mensajes. El protocolo es
+\emph{Two-Phase Commit}. El código está en el módulo \texttt{dos\_fases} del
+crate \texttt{tp2\_reservas} y esta parte se corre con
+\texttt{cargo run -- parte3}.
+
+Los dos servicios están armados como actores: un hilo con el recurso adentro
+y un buzón \texttt{mpsc}. La diferencia está en quién decide. Un actor que
+atiende un débito contra una sola cuenta resuelve ahí mismo si entra o no.
+Acá su respuesta pasa a ser un voto y la decisión la toma el coordinador
+cuando tiene los votos de todos.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=3.4cm,y=0.8cm]
+  % Lineas de vida: el coordinador va en el medio para que ninguna flecha cruce
+  \node[caja] (pagos) at (0,0) {ServicioPagos};
+  \node[caja] (coord) at (1,0) {Coordinador};
+  \node[caja] (inv) at (2,0) {ServicioInventario};
+  \foreach \x in {0,1,2} \draw[dashed] (\x,-0.4) -- (\x,-5.6);
+
+  % Fase 1: Prepare y votacion
+  \draw[flecha] (1,-1.1) -- node[above,font=\scriptsize]{\texttt{Prepare}} (0,-1.1);
+  \draw[flecha] (1,-1.1) -- node[above,font=\scriptsize]{\texttt{Prepare}} (2,-1.1);
+  \draw[flecha] (0,-2.3) -- node[above,font=\scriptsize]{\texttt{Yes}} (1,-2.3);
+  \draw[flecha] (2,-2.3) -- node[above,font=\scriptsize]{\texttt{Yes}} (1,-2.3);
+
+  % Fase 2: decision
+  \draw[flecha] (1,-3.9) -- node[above,font=\scriptsize]{\texttt{Commit}} (0,-3.9);
+  \draw[flecha] (1,-3.9) -- node[above,font=\scriptsize]{\texttt{Commit}} (2,-3.9);
+
+  % Etiquetas al costado
+  \node[font=\scriptsize,anchor=west] at (2.25,-1.7) {FASE 1: votación};
+  \node[font=\scriptsize,anchor=west] at (2.25,-3.1) {punto de decisión};
+  \node[font=\scriptsize,anchor=west] at (2.25,-3.9) {FASE 2: commit};
+  \node[font=\scriptsize,anchor=west] at (2.25,-4.9) {fondos y asiento firmes};
+  \node[font=\scriptsize,anchor=east] at (-0.1,-3.1) {PREPARADO};
+\end{tikzpicture}
+\caption{Transacción exitosa: los dos participantes votan \texttt{Yes},
+quedan PREPARADOS y esperan la decisión del coordinador.}
+\label{fig:2pc-secuencia}
+\end{figure}
+
+\subsection{Los participantes y el estado PREPARADO}
+
+Cada participante maneja su recurso con tres operaciones.
+\texttt{preparar} reserva de forma tentativa y devuelve el voto,
+\texttt{confirmar} hace definitiva la reserva y \texttt{revertir} la deshace.
+En \texttt{ServicioPagos} preparar descuenta el monto y lo marca retenido,
+confirmar levanta la retención y revertir devuelve la plata. En
+\texttt{ServicioInventario} preparar marca el asiento como no libre y
+retenido, confirmar lo pasa a vendido y revertir lo libera.
+
+El voto \texttt{Yes} y la reserva son la misma operación. Un participante que
+vota \texttt{Yes} promete que puede cumplir, y si el asiento quedara libre
+otra compra podría tomarlo y el \texttt{Commit} llegaría a un asiento ya
+vendido.
+
+Después de votar \texttt{Yes} el participante queda en
+\texttt{EstadoParticipante::Preparado} y pierde la autonomía. Confirmar no
+puede, porque no sabe cómo votó el otro. Abortar tampoco, porque el
+coordinador pudo haber decidido \texttt{Commit}. Le queda esperar, y el bucle
+del actor lo refleja en el tipo de espera:
+
+\begin{lstlisting}
+let msg = if estado == EstadoParticipante::Preparado {
+    match rx.recv_timeout(timeout_decision) {
+        Ok(m) => m,
+        // Estoy PREPARADO: no puedo hacer commit ni abort por mi cuenta.
+        // Anoto que quede bloqueado y sigo esperando la decision.
+        Err(RecvTimeoutError::Timeout) => { bloqueado = true; continue; }
+        Err(RecvTimeoutError::Disconnected) => break,
+    }
+} else {
+    match rx.recv() { Ok(m) => m, Err(_) => break }
+};
+\end{lstlisting}
+
+El \texttt{continue} hace que al vencer el timeout el participante anote el
+bloqueo en su \texttt{wal} y vuelva a esperar. Ese \texttt{wal} es
+un vector de líneas que en un sistema real sería un log en disco, el que le
+permite a un servicio que se reinicia recordar que había votado \texttt{Yes}
+en lugar de abortar por defecto.
+
+\subsection{Fase 1: Prepare}
+
+El coordinador manda \texttt{Prepare} a todos con un canal de respuesta
+compartido y junta los votos contra una fecha límite única, no contra un
+timeout por participante:
+
+\begin{lstlisting}
+// FASE 1 - PREPARE: pregunto a todos y junto los votos con timeout.
+let (tx_votos, rx_votos) = channel::<(String, Voto)>();
+for (_, p) in participantes {
+    let _ = p.send(MsgParticipante::Prepare { tx, responder_a: tx_votos.clone() });
+}
+let limite = Instant::now() + timeout_votos;
+let mut votos: HashMap<String, Voto> = HashMap::new();
+while votos.len() < participantes.len() {
+    let restante = limite.saturating_duration_since(Instant::now());
+    match rx_votos.recv_timeout(restante) {
+        Ok((nombre, v)) => { votos.insert(nombre, v); }
+        // Vencio el plazo: los que faltan cuentan como NO.
+        Err(RecvTimeoutError::Timeout) => break,
+        Err(RecvTimeoutError::Disconnected) => break,
+    }
+}
+let todos_yes = participantes.iter()
+    .all(|(n, _)| votos.get(n) == Some(&Voto::Yes));
+\end{lstlisting}
+
+Al participante que no contesta dentro del plazo se lo cuenta como
+\texttt{No}, porque no llega un mensaje de error sino que falta un mensaje,
+y esa ausencia es todo lo que el coordinador tiene para interpretar. La
+lectura es segura porque quien no contestó no reservó nada, y si llegó a
+reservar va a recibir el \texttt{Rollback} de todas formas. Contar esa falta
+de respuesta como \texttt{Yes} habilitaría un \texttt{Commit} sobre un
+recurso que nadie garantizó.
+
+\subsection{Fase 2: Commit o Rollback}
+
+Con los votos juntos el coordinador decide una sola vez:
+
+\begin{lstlisting}
+// FASE 2 - COMMIT / ROLLBACK: la decision es unica y final.
+let decision = if todos_yes { Decision::Commit } else { Decision::Rollback };
+for (nombre, p) in participantes {
+    let msg = match decision {
+        Decision::Commit => MsgParticipante::Commit { tx },
+        Decision::Rollback => MsgParticipante::Rollback { tx },
+    };
+    let _ = p.send(msg);
+}
+\end{lstlisting}
+
+El \texttt{Commit} necesita unanimidad, y un solo \texttt{No} o un solo voto
+que no llega alcanzan para el \texttt{Rollback}. La decisión se registra
+antes de enviarse. Si el coordinador cayera después de mandar el primer
+\texttt{Commit} y al reiniciarse no recordara qué decidió, podría mandarle
+\texttt{Rollback} al segundo participante y partir la transacción en dos
+mitades inconsistentes.
+
+Del lado del participante, \texttt{Commit} se aplica solo si estaba
+\texttt{Preparado} y \texttt{Rollback} se aplica siempre que no haya
+confirmado. \texttt{revertir} es idempotente, así que un \texttt{Rollback}
+que le llega a quien votó \texttt{No} no hace nada.
+
+\subsection{Fallas inyectadas}
+
+\texttt{ejecutar\_escenario} arma la compra a partir de un
+\texttt{Escenario} con el saldo, el asiento y las fallas:
+\texttt{Comportamiento::NoResponde} para un participante que deja de
+contestar y \texttt{FallaCoordinador::CaeTrasPrepare} para el coordinador
+que se cae con los votos en la mano. \texttt{cargo run -- parte3} imprime
+cinco casos con el log del coordinador y el \texttt{wal} de cada servicio:
+el camino feliz, un \texttt{No} de cada servicio, el participante que no
+contesta y la caída del coordinador. Son los mismos cinco que verifican los
+tests.
+
+\subsection{Partición de red después del Prepare}
+
+En el caso E los dos servicios votaron \texttt{Yes} y quedaron
+\texttt{Preparado}, con los fondos retenidos y el asiento bloqueado. Ahí se
+parte la red y la orden de \texttt{Commit} no llega.
+
+Desde donde están, los participantes no saben si el coordinador alcanzó a
+decidir \texttt{Commit} o si decidió \texttt{Rollback} por el timeout de
+algún otro. Con esa duda no pueden moverse. Si confirman y la decisión era
+\texttt{Rollback}, o si abortan y era \texttt{Commit}, la transacción queda
+partida en un asiento vendido sin cobrar o un cobro sin asiento.
+Consultarse entre ellos no ayuda, porque los dos están en el mismo estado, y
+preguntarle al coordinador es lo que la partición impide.
+
+Se quedan esperando, y mientras esperan siguen reteniendo el recurso. El
+asiento no se le puede vender a nadie más y la plata del usuario no está ni
+cobrada ni disponible. En la salida del caso E eso aparece como
+\texttt{fondos\_retenidos=true} y \texttt{asiento\_retenido=true}. Una
+transacción trabada le bloquea recursos a las que vienen atrás.
+
+En términos de CAP, 2PC es un protocolo CP, porque ante la partición
+conserva la consistencia y pierde disponibilidad. El sistema deja de responder compras sobre esos
+recursos antes que arriesgar un asiento vendido dos veces.
+
+\subsection{Safety o liveness}
+
+Se compromete \emph{liveness}; \emph{safety} se mantiene.
+
+Safety acá es la atomicidad: todos los participantes terminan con la misma
+decisión y nunca hay uno confirmado y otro abortado. Durante la partición
+eso sigue valiendo, y sigue valiendo porque los participantes permanecen a
+la espera. El bloqueo es el mecanismo con el que 2PC preserva la atomicidad.
+Un participante que al vencer el timeout decidiera por su cuenta estaría
+eligiendo disponibilidad y podría dejar la transacción partida.
+
+Liveness es la terminación: toda transacción debería llegar a un estado
+final en tiempo finito. Eso se pierde porque los participantes quedan en un
+estado incierto y no hay cota para cuánto van a seguir ahí. Esta es la propiedad
+\emph{blocking} de 2PC y es inherente al protocolo, porque la información
+que el participante necesita para salir de \texttt{Preparado} está
+únicamente en el coordinador.
+
+La ventana se puede angostar, no eliminar. Un protocolo cooperativo de
+terminación deja que los participantes se consulten: si alguno recibió la
+decisión la propaga, y si alguno todavía no votó se puede abortar. No
+alcanza cuando todos están \texttt{Preparado}, que es el caso E. Lo que se
+usa en la práctica es replicar al coordinador con un algoritmo de consenso,
+de manera que la decisión quede en varios nodos y el reemplazo la lea y la
+reenvíe. Si se pierde la mayoría el sistema vuelve a bloquearse.
+
+\subsection{Pruebas}
+
+Las pruebas están en el módulo \texttt{dos\_fases} y se corren con
+\texttt{cargo test --lib dos\_fases}. Cada una fija un escenario y revisa la
+decisión del coordinador y el reporte final de los dos participantes.
+
+\texttt{todos\_yes\_hace\_commit} es el camino feliz. La decisión es
+\texttt{Commit}, los dos quedan \texttt{Confirmado}, el saldo es 950 y el
+asiento vendido.
+
+\texttt{un\_no\_en\_inventario\_hace\_rollback\_y\_libera\_fondos} arranca
+con el asiento ya vendido. La decisión es \texttt{Rollback} y lo que se mira
+es la compensación: el saldo volvió a 1000 y Pagos no retiene nada. Un
+\texttt{Yes} no deja plata colgada si la transacción aborta.
+
+\texttt{saldo\_insuficiente\_hace\_rollback\_y\_libera\_asiento} es el
+simétrico, con un saldo de 10, y verifica que el asiento que Inventario
+había bloqueado vuelva a estar libre, porque un asiento que no se libera es
+una entrada que no se puede vender.
+
+\texttt{participante\_que\_no\_responde\_provoca\_rollback\_por\_timeout}
+pone a Pagos en \texttt{NoResponde}. El voto que falta queda en
+\texttt{None}, la decisión es \texttt{Rollback} e Inventario libera el
+asiento; el coordinador no se queda esperando un voto que no va a llegar.
+
+\texttt{coordinador\_cae\_tras\_prepare\_bloquea\_a\_los\_participantes}
+cubre el caso analizado. Verifica que no hubo decisión (\texttt{None}), que
+los dos quedaron \texttt{Preparado} y marcados como bloqueados y que los dos
+siguen reteniendo su recurso. Lo que se afirma ahí es que el protocolo no
+termina y que ninguno de los dos se adelantó a decidir solo.
