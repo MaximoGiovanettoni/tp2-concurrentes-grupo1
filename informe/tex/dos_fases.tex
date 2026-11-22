@@ -1,0 +1,87 @@
+\section{Transacciones distribuidas: Two-Phase Commit}
+
+Una compra toca dos servicios: \texttt{ServicioPagos} debita el monto y
+\texttt{ServicioInventario} asigna el asiento. Ninguno puede confirmar solo.
+El coordinador corre un Two-Phase Commit. El código está en el módulo
+\texttt{dos\_fases}. Se corre con \texttt{cargo run -- parte3}.
+
+\subsection{Fase Prepare y fase Commit/Rollback}
+
+La función \texttt{coordinar\_2pc} manda \texttt{Prepare} a los dos
+participantes y espera los votos con \texttt{recv\_timeout}. Cada servicio
+es un hilo con buzón. Si puede reservar el recurso, contesta \texttt{Yes}
+y pasa a \texttt{Preparado}. Si no, contesta \texttt{No} y aborta en local.
+
+\begin{lstlisting}
+// FASE 1
+for (_, p) in participantes {
+    p.send(MsgParticipante::Prepare {
+        tx,
+        responder_a: tx_votos.clone(),
+    });
+}
+// junta votos hasta el timeout
+let todos_yes = participantes
+    .iter()
+    .all(|(n, _)| votos.get(n) == Some(&Voto::Yes));
+
+// FASE 2
+let decision = if todos_yes {
+    Decision::Commit
+} else {
+    Decision::Rollback
+};
+for (_, p) in participantes {
+    match decision {
+        Decision::Commit => {
+            p.send(MsgParticipante::Commit { tx });
+        }
+        Decision::Rollback => {
+            p.send(MsgParticipante::Rollback { tx });
+        }
+    }
+}
+\end{lstlisting}
+
+En Pagos, \texttt{preparar} resta el monto y marca \texttt{retenido} si el
+saldo alcanza. En Inventario, marca el asiento retenido si estaba libre.
+\texttt{confirmar} deja el débito o la venta definitivos.
+\texttt{revertir} devuelve lo retenido. Un voto que no llega a tiempo se
+cuenta como \texttt{No}: el coordinador manda \texttt{Rollback} a todos.
+
+\subsection{Partición después del Yes}
+
+El escenario del enunciado es este: los dos servicios ya contestaron
+\texttt{Yes} y, antes de que llegue el \texttt{Commit}, la red se parte o
+el coordinador se cae. En el código eso es la falla
+\texttt{CaeTrasPrepare}. El coordinador junta los votos, no decide y no
+manda nada. Cada participante preparado espera la decisión con
+\texttt{recv\_timeout}. Si vence, marca \texttt{bloqueado} y sigue
+reteniendo el recurso. No puede confirmar solo: el otro pudo haber votado
+\texttt{No}. No puede abortar solo: el otro pudo haber recibido un
+\texttt{Commit}. Queda parado con el saldo o el asiento tomados.
+
+Eso es el bloqueo de 2PC. Safety sigue en pie: no hay un servicio en
+\texttt{Confirmado} y otro en \texttt{Abortado} por la misma compra. Lo
+que se pierde es liveness: la transacción no termina mientras dure la
+partición. En términos de CAP, 2PC elige consistencia frente a la
+partición y deja de responder sobre esos recursos. Es un diseño CP: la
+red no es confiable, así que la elección queda entre C y A, y acá se
+prioriza que los dos nodos vean el mismo desenlace.
+
+\subsection{Pruebas}
+
+El test del caso feliz pide \texttt{Commit}, saldo 950, asiento vendido y
+nadie bloqueado.
+
+Los dos tests de un \texttt{No} (inventario ocupado o saldo corto) fuerzan
+\texttt{Rollback}. El que había reservado revierte.
+
+Si Pagos no contesta, el coordinador cuenta el timeout como \texttt{No} y
+manda \texttt{Rollback}. Inventario libera el asiento.
+
+El test de la partición deja la decisión en \texttt{None}. Los dos quedan
+en \texttt{Preparado}, con \texttt{bloqueado} en verdadero y el recurso
+retenido.
+
+Corrimos \texttt{cargo test --lib dos\_fases}. Las cinco pasan.
