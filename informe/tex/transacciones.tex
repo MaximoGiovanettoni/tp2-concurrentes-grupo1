@@ -1,6 +1,6 @@
 \section{Transacciones Distribuidas}
 
-Una compra toca dos microservicios: \texttt{ServicioPagos} debita la plata y
+Una compra toca dos microservicios: \texttt{ServicioPagos} debita el saldo y
 \texttt{ServicioInventario} asigna el asiento. Son procesos distintos y cada
 uno tiene su base. No hay una transacción local que abarque a los dos, así
 que la atomicidad hay que armarla con mensajes. El protocolo es
@@ -51,7 +51,7 @@ Cada participante maneja su recurso con tres operaciones.
 \texttt{preparar} reserva de forma tentativa y devuelve el voto,
 \texttt{confirmar} hace definitiva la reserva y \texttt{revertir} la deshace.
 En \texttt{ServicioPagos} preparar descuenta el monto y lo marca retenido,
-confirmar levanta la retención y revertir devuelve la plata. En
+confirmar levanta la retención y revertir devuelve el monto. En
 \texttt{ServicioInventario} preparar marca el asiento como no libre y
 retenido, confirmar lo pasa a vendido y revertir lo libera.
 
@@ -176,7 +176,7 @@ Consultarse entre ellos no ayuda, porque los dos están en el mismo estado, y
 preguntarle al coordinador es lo que la partición impide.
 
 Se quedan esperando, y mientras esperan siguen reteniendo el recurso. El
-asiento no se le puede vender a nadie más y la plata del usuario no está ni
+asiento no se le puede vender a nadie más y el saldo del usuario no está ni
 cobrada ni disponible. En la salida del caso E eso aparece como
 \texttt{fondos\_retenidos=true} y \texttt{asiento\_retenido=true}. Una
 transacción trabada le bloquea recursos a las que vienen atrás.
@@ -224,7 +224,7 @@ asiento vendido.
 \texttt{un\_no\_en\_inventario\_hace\_rollback\_y\_libera\_fondos} arranca
 con el asiento ya vendido. La decisión es \texttt{Rollback} y lo que se mira
 es la compensación: el saldo volvió a 1000 y Pagos no retiene nada. Un
-\texttt{Yes} no deja plata colgada si la transacción aborta.
+\texttt{Yes} no deja el monto retenido si la transacción aborta.
 
 \texttt{saldo\_insuficiente\_hace\_rollback\_y\_libera\_asiento} es el
 simétrico, con un saldo de 10, y verifica que el asiento que Inventario

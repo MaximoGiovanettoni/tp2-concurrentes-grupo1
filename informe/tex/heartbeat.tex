@@ -1,81 +1,61 @@
-\section{Detección de fallos con heartbeats}
+\section{Heartbeats}
 
-El clúster de coordinadores tiene tres nodos. Cada uno envía un
-\texttt{Heartbeat} cada 500~ms por un canal \texttt{mpsc} a un monitor
-central. El código está en el módulo \texttt{heartbeat} del crate
-\texttt{tp2\_reservas}. Esta parte se corre con
-\texttt{cargo run -- parte2}; con \texttt{parte2-lider} se fuerza la caída
-del líder para disparar la elección de la Parte~2.2.
+En un sistema distribuido un nodo puede fallar sin que el resto lo note
+de inmediato. Hay que distinguir un nodo caído de uno lento. Usamos
+heartbeats y timeouts: cada nodo envía periódicamente un ``estoy vivo''
+y, si el monitor no lo recibe a tiempo, lo declara fallido. El módulo
+\texttt{heartbeat} simula eso. Se ejecuta con
+\texttt{cargo run -- parte2}. Con \texttt{parte2-lider} se fuerza la
+caída del líder para disparar la elección de la sección siguiente.
 
-\subsection{El monitor y \texttt{recv\_timeout}}
+El clúster tiene tres nodos. Cada uno envía un \texttt{Heartbeat} cada
+500~ms por un canal \texttt{mpsc} hacia un monitor. Por cada nodo hay un
+vigilante: un hilo que ejecuta \texttt{vigilar} y hace
+\texttt{recv\_timeout} sobre el receptor correspondiente. El tiempo de
+espera depende del estado actual. Desde \texttt{Vivo} espera el umbral
+de sospecha. Si no llega nada, pasa a \texttt{Sospechoso} y emite
+\texttt{Evento::Sospechoso}. Desde \texttt{Sospechoso} espera la
+diferencia entre el umbral de caída y el de sospecha; si el silencio
+continúa, pasa a \texttt{Caido}, emite \texttt{Evento::Caido} y termina.
+Si llega un latido estando sospechoso, vuelve a \texttt{Vivo} y emite
+\texttt{Evento::Recuperado}, porque el monitor se había equivocado.
 
-Por cada nodo hay un vigilante: un hilo que corre \texttt{vigilar} y hace
-\texttt{recv\_timeout} sobre el receptor de ese nodo. La espera no es fija:
-depende del estado en que está el vigilante. Desde \texttt{Vivo} espera el
-umbral de sospecha; si no llega nada, pasa a \texttt{Sospechoso} y avisa
-con \texttt{Evento::Sospechoso}. Desde \texttt{Sospechoso} espera la
-diferencia entre el umbral de caída y el de sospecha; si sigue sin llegar
-nada, pasa a \texttt{Caido}, emite \texttt{Evento::Caido} y termina. Si
-llega un latido estando en \texttt{Sospechoso}, vuelve a \texttt{Vivo} y
-emite \texttt{Evento::Recuperado}: esa es la falsa alarma que se corrige
-sola.
+Los umbrales son 1~s para sospechoso y 2~s para caído, con latidos cada
+500~ms. \texttt{Config::rapida()} usa los mismos valores divididos por
+diez (50, 100 y 200~ms) para que las pruebas no tarden de más.
 
-Los umbrales del enunciado son 1~s para sospechoso y 2~s para caído, con
-latidos cada 500~ms. La configuración \texttt{Config::rapida()} usa los
-mismos valores divididos por diez (50, 100 y 200~ms) para que los tests
-corran en menos de un segundo.
+\subsection{Caída del nodo}
 
-\subsection{La caída simulada}
-
-La caída no cierra el canal. El nodo deja de enviar porque un
-\texttt{AtomicBool} llamado \texttt{caido} pasa a \texttt{true}, pero el
-\texttt{Sender} sigue vivo. La diferencia importa. Si el nodo terminara
-limpiamente, el \texttt{recv\_timeout} devolvería
+La caída simulada no cierra el canal. El nodo deja de enviar porque un
+\texttt{AtomicBool} llamado \texttt{caido} pasa a verdadero, pero el
+\texttt{Sender} permanece vivo. Si el nodo terminara de forma limpia,
+\texttt{recv\_timeout} devolvería
 \texttt{RecvTimeoutError::Disconnected} y el vigilante saldría del bucle
-sin declarar nada: no es una falla, es un cierre ordenado. Si el nodo se
-cuelga o la red se parte, el canal queda abierto pero no llega nada, y el
-silencio es lo único que el monitor puede interpretar. Esa es la situación
-que simula el flag: un servidor colgado, no un proceso terminado.
+sin declarar falla: sería un cierre ordenado. Si el nodo se cuelga o la
+red se parte, el canal queda abierto y no llega nada; el silencio es lo
+único que el monitor ve. El flag modela un servidor detenido, no un
+proceso que terminó bien.
 
-El monitor recibe los eventos por otro canal \texttt{mpsc} y los va
-guardando con el instante en que llegaron. \texttt{simular} inyecta la
-falla cuando pasa \texttt{caer\_tras}, deja correr el tiempo suficiente
-para que el vigilante declare la caída y corta el bucle en el primer
-\texttt{Evento::Caido} de la víctima. Los otros dos nodos siguen latiendo
-durante toda la simulación; el test verifica que nunca se los declara
+\texttt{simular} inyecta la falla cuando transcurre \texttt{caer\_tras},
+deja correr el tiempo hasta que el vigilante declare la caída y corta en
+el primer \texttt{Evento::Caido} de la víctima. Los otros dos nodos
+siguen enviando latidos. La prueba verifica que nunca se los declare
 caídos.
 
-\subsection{El límite del detector}
+\subsection{Detector imperfecto}
 
-Un detector con timeouts no puede distinguir un nodo caído de un nodo
-lento. El umbral es una decisión operativa: si el nodo tarda 1,5~s en
-contestar, el monitor lo declara \texttt{Sospechoso} y se puede recuperar;
-si tarda 2,5~s, lo declara \texttt{Caido} y se dispara una elección.
-Bajar los umbrales detecta antes pero genera más falsas alarmas. Subirlos
-evita falsas alarmas pero tarda más en reaccionar. No hay una elección
-correcta sin conocer la latencia de la red.
-
-Esta incertidumbre es la que motiva el objetivo de la Parte~2: el monitor
-no sabe si el nodo está caído, solo sabe que no contestó a tiempo. La
-decisión de tratarlo como caído es una apuesta, y el precio de equivocarse
-es una elección de más. Por eso el detector se combina con un algoritmo de
-elección que tolera falsas alarmas: si el líder viejo vuelve, Bully
-converge de nuevo al nodo de mayor ID vivo y el liderazgo se corrige.
+Un detector basado en timeouts no distingue un nodo caído de uno lento.
+En un sistema asíncrono no existe un detector de fallas perfecto, porque
+el silencio puede deberse a una caída o a una red lenta. Con un umbral
+corto aumentan los falsos positivos. Con un umbral largo se demora más
+la reacción ante una falla real. El monitor solo registra que el latido no llegó a tiempo.
 
 \subsection{Pruebas}
 
-\texttt{nodo\_caido\_pasa\_por\_sospechoso\_y\_luego\_caido} corre
-\texttt{simular} con tres nodos, tira abajo al nodo~1 y verifica que el
-evento \texttt{Sospechoso(1)} aparece antes que \texttt{Caido(1)}, y que
-ningún otro nodo se declara caído.
-
-\texttt{nodo\_sano\_no\_genera\_eventos} lanza un solo vigilante, le manda
-cinco latidos con el período correcto y comprueba que no emite ningún
-evento: el detector no tiene falsos positivos si los latidos llegan a
-tiempo.
-
-\texttt{falsa\_alarma\_se\_recupera} duerme 150~ms sin mandar latidos
-(entre el umbral de sospecha y el de caída), después manda uno y verifica
-que la secuencia de eventos es \texttt{Sospechoso(0)} y después
-\texttt{Recuperado(0)}. Es el caso en que el monitor se equivoca y se
-corrige sin intervención.
+Con tres nodos, al detener el envío del nodo~1 aparece primero
+\texttt{Sospechoso(1)} y después \texttt{Caido(1)}, sin declarar caídos
+a los demás. Un vigilante que recibe cinco latidos a tiempo no emite
+ningún evento. Si el nodo se silencia 150~ms (entre el umbral de sospecha
+y el de caída) y luego envía un latido, la secuencia es
+\texttt{Sospechoso(0)} y \texttt{Recuperado(0)}. Las tres pruebas de
+\texttt{cargo test --lib heartbeat} pasan.

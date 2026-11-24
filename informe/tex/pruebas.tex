@@ -1,0 +1,23 @@
+\section{Plan de pruebas}
+
+Las pruebas unitarias están en el mismo archivo que cada módulo
+(\texttt{actores}, \texttt{heartbeat}, \texttt{bully},
+\texttt{dos\_fases}, \texttt{petri}) y se ejecutan con
+\texttt{cargo test --lib}.
+
+En actores se verifica que muchos débitos concurrentes no dejen saldo
+negativo, que un débito sin fondos no modifique la cuenta y que una sola
+entrada no se asigne dos veces. En heartbeats, que la víctima pase por
+sospechoso antes de caído, que un nodo sano no genere eventos y que una
+falsa alarma se recupere. En Bully, que gane el vivo de mayor ID con el
+líder caído, con dos mayores caídos y con todos vivos. En 2PC se cubren
+la compra exitosa, los \texttt{No} locales, el timeout de un
+participante y la caída del coordinador después del \texttt{Prepare},
+que deja a ambos bloqueados. En Petri se comprueba que el camino
+exitoso conserve el invariante y la 1-acotación.
+
+El ejecutable (\texttt{parte1} \ldots{} \texttt{parte4}) reproduce esos
+escenarios en consola. Si el coordinador cae tras el \texttt{Yes}, el
+token del participante queda en \texttt{P\_Prepared} sin transición
+habilitada: es el mismo estado \texttt{bloqueado} de
+\texttt{dos\_fases}.

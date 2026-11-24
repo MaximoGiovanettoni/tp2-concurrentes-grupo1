@@ -3,6 +3,7 @@
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage[spanish,provide=*]{babel}
+\usepackage{amsmath}
 \usepackage[margin=2.5cm, top=2.4cm, bottom=2.6cm]{geometry}
 \usepackage{graphicx}
 \usepackage{fancyhdr}
@@ -71,12 +72,13 @@ Verne, Bruno & 112176 \\
 \vfill
 \end{titlepage}
 
-El trabajo es el núcleo de una venta de entradas. La cuenta de cada usuario y los asientos viven en actores distintos: el estado queda en el hilo de cada uno, y una compra se resuelve mandando mensajes.
+El código de la entrega está en el crate \texttt{tp2\_reservas}.
 
 \input{tex/actores}
 \input{tex/heartbeat}
 \input{tex/bully}
 \input{tex/transacciones}
 \input{tex/petri}
+\input{tex/pruebas}
 
 \end{document}
