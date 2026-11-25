@@ -1,0 +1,11 @@
+# Salida de compilacion de cargo
+/target
+
+# Auxiliares que deja pdflatex
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
